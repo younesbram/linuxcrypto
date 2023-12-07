@@ -28,6 +28,7 @@ func main() {
 	}
 }
 
+// In the future instead of loading files, create files with robust automation techniques for each edge case unit case or integration tests etc. Depends on the context.
 func loadFile(fileName string, t *testing.T) []byte {
 	content, err := ioutil.ReadFile(fileName)
 	if err != nil {
@@ -37,8 +38,8 @@ func loadFile(fileName string, t *testing.T) []byte {
 }
 
 func TestValidSignature(t *testing.T) {
-	signature := loadFile("script.sig.b64", t)
-	scriptContent := loadFile("script.sh", t)
+	signature := loadFile("test/good_script.sig.b64", t) 
+	scriptContent := loadFile("test/good_script.sh", t)  
 	sendRequestToServer(signature, scriptContent, "Script executed successfully", t)
 }
 
@@ -49,15 +50,15 @@ func TestInvalidSignature(t *testing.T) {
 }
 
 func TestErrorExecutingScript(t *testing.T) {
-	signature := loadFile("script.sig.b64", t)
-	scriptContent := loadFile("script_with_error.sh", t)
+	signature := loadFile("test/bad_script.sig.b64", t)
+	scriptContent := loadFile("test/bad_script.sh", t) 
 	sendRequestToServer(signature, scriptContent, "Error executing script", t)
 }
 
 func TestConcurrentRequests(t *testing.T) {
 	numRequests := 5
-	signature := loadFile("script.sig.b64", t)
-	scriptContent := loadFile("script.sh", t)
+	signature := loadFile("test/good_script.sig.b64", t)
+	scriptContent := loadFile("test/good_script.sh", t)
 
 	responseChan := make(chan string, numRequests)
 
