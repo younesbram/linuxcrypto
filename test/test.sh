@@ -1,10 +1,9 @@
 #!/bin/bash
 
-# Ensure we're in the test directory
-cd "$(dirname "$0")"
-
 # Build the test client
-go build test_client.go
+go build -o test_client test/test_client.go
 
-# Run the test client
-./test_client
+echo "Build complete. Run the test client binary with ./test_client"
+
+
+#chmod +x test/test.sh

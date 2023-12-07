@@ -6,7 +6,7 @@ cd "src"
 # Build the server
 go build -o ../server
 
-echo "Build complete. The server binary is located at ../server"
+echo "Build complete. Run the server binary with ./server"
 
 
 #chmod +x build.sh
