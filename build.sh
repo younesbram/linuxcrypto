@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Ensure we're in the project directory
-cd "$(dirname "$0")/../src"
+cd "src"
 
 # Build the server
 go build -o ../server

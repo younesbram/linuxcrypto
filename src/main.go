@@ -1,3 +1,4 @@
+// main.go
 package main
 
 import (
@@ -6,24 +7,40 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
 	"net"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
-	"encoding/base64"
+	"sync"
 )
 
 const (
-	port            = ":8080"              // Port where the server will listen for TCP connections
-	certificatePath = "./certs/server.crt" // Path to the x509 certificate
+	port            = ":8080"                
+	certsDirectory  = "./certs" // dir containing the x509 certificates
+	certExtension   = ".crt"
 )
 
+var (
+	mu sync.Mutex // Mutex to handle concurrent requests
+)
+
+// publicKeyInfo holds the public key and the associated metadata
+type publicKeyInfo struct {
+	publicKey *rsa.PublicKey
+	keyUsage  x509.KeyUsage
+}
+
 func main() {
-	// Listen on the specified port for incoming TCP connections
+	certificates, err := loadPublicKeysFromDir(certsDirectory)
+	if err != nil {
+		log.Fatalf("Error loading certificates: %v", err)
+	}
+
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("Unable to listen on port %s: %v", port, err)
@@ -32,21 +49,20 @@ func main() {
 
 	log.Printf("Server listening on %s", port)
 
-	// Main loop to accept connections
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Printf("Unable to accept connection: %v", err)
 			continue
 		}
-		go handleConnection(conn)
+		go handleConnection(conn, certificates)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+// handleConnection manages each client connection
+func handleConnection(conn net.Conn, certificates []publicKeyInfo) {
 	defer conn.Close()
 
-	// Read the first line for the signature
 	reader := bufio.NewReader(conn)
 	encodedSig, err := reader.ReadString('\n')
 	if err != nil {
@@ -61,70 +77,97 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Read the rest of the input for the script
-	scriptContent, err := io.ReadAll(reader)
+	scriptContent, err := ioutil.ReadAll(reader)
 	if err != nil {
 		log.Printf("Unable to read script: %v", err)
 		fmt.Fprintln(conn, "Error reading script")
 		return
 	}
 
-	// Verify the signature
-	publicKey, err := extractPublicKey(certificatePath)
-	if err != nil {
-		log.Printf("Unable to extract public key: %v", err)
-		fmt.Fprintln(conn, "Error extracting public key")
-		return
+	valid := false
+	for _, cert := range certificates {
+		if (cert.keyUsage & x509.KeyUsageDigitalSignature) != 0 {
+			if err := verifySignature(cert.publicKey, signature, scriptContent); err == nil {
+				valid = true
+				break
+			}
+		}
 	}
-	if err := verifySignature(publicKey, signature, scriptContent); err != nil {
-		log.Printf("Invalid signature: %v", err)
+
+	if !valid {
+		log.Printf("Invalid signature")
 		fmt.Fprintln(conn, "Invalid signature")
 		return
 	}
 
-	// Execute the script if the signature is valid
-	output, err := executeScript(string(scriptContent))
+	output, err := executeScript(scriptContent)
 	if err != nil {
 		log.Printf("Error executing script: %v", err)
 		fmt.Fprintln(conn, "Error executing script")
 		return
 	}
 
-	// Send back the script output
 	fmt.Fprintln(conn, "Script executed successfully")
 	fmt.Fprintln(conn, string(output))
 }
 
-func extractPublicKey(certPath string) (*rsa.PublicKey, error) {
-	certPEM, err := os.ReadFile(certPath)
+// loadPublicKeysFromDir loads all public keys and their usage from the certificate files in a directory
+func loadPublicKeysFromDir(certDir string) ([]publicKeyInfo, error) {
+	var keys []publicKeyInfo
+	files, err := ioutil.ReadDir(certDir)
 	if err != nil {
-		return nil, fmt.Errorf("read certificate file: %v", err)
+		return nil, err
 	}
 
-	block, _ := pem.Decode(certPEM)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block containing the certificate")
+	for _, file := range files {
+		if strings.HasSuffix(file.Name(), certExtension) {
+			certPath := filepath.Join(certDir, file.Name())
+			certData, err := ioutil.ReadFile(certPath)
+			if err != nil {
+				log.Printf("Error reading certificate file %s: %v", certPath, err)
+				continue
+			}
+
+			block, _ := pem.Decode(certData)
+			if block == nil {
+				log.Printf("Failed to decode PEM block containing the certificate %s", certPath)
+				continue
+			}
+
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				log.Printf("Failed to parse certificate %s: %v", certPath, err)
+				continue
+			}
+
+			rsaPublicKey, ok := cert.PublicKey.(*rsa.PublicKey)
+			if !ok {
+				log.Printf("Certificate public key is not of type RSA in %s", certPath)
+				continue
+			}
+
+			keys = append(keys, publicKeyInfo{
+				publicKey: rsaPublicKey,
+				keyUsage:  cert.KeyUsage,
+			})
+		}
 	}
 
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse certificate: %v", err)
-	}
-
-	rsaPublicKey, ok := cert.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("certificate public key is not of type RSA")
-	}
-
-	return rsaPublicKey, nil
+	return keys, nil
 }
 
+// verifySignature checks the digital signature of the script content using the provided public key
 func verifySignature(publicKey *rsa.PublicKey, signature, scriptContent []byte) error {
+	mu.Lock()
+	defer mu.Unlock()
+
 	hashed := sha256.Sum256(scriptContent)
 	return rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signature)
 }
 
-func executeScript(scriptContent string) ([]byte, error) {
-	cmd := exec.Command("bash", "-c", scriptContent)
+// executeScript executes the script content in a bash shell and returns its combined output
+func executeScript(scriptContent []byte) ([]byte, error) {
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader(string(scriptContent))
 	return cmd.CombinedOutput()
 }
