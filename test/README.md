@@ -15,37 +15,41 @@ Run the following commands to generate an RSA key pair:
 
 ```
 openssl genrsa -out private_key.pem 2048
-openssl rsa -in private_key.pem -pubout -out public_key.pem
+openssl rsa -in private_key.pem -pubout -out certs/public_key.pem
 ```
 
-Place `public_key.pem` in the server's `certs` directory.
+Make sure `public_key.pem` in the server's `certs` directory.
+Please make sure your private key is kept secret.
 
 ### Create Test Scripts
 
-Create two bash scripts: `script.sh` and `script_with_error.sh`.
+Create two bash scripts: `good_script.sh` and `bad_script.sh`.
+Place them in /test/.
 
-`script.sh`:
+`good_script.sh`:
 ```
 echo "This is a valid script."
 # Change as you like for testing purposes
 ```
 
-`script_with_error.sh`:
+`bad_script.sh`:
 ```
 echo "I am an invalid script".
 invalid_command or malicious_script
 ```
+
 
 ### Generate Signatures
 
 Use the private key to generate signatures for these scripts:
 
 ```
-openssl dgst -sha256 -sign private_key.pem -out script.sig script.sh
-openssl base64 -in script.sig -out script.sig.b64
-openssl dgst -sha256 -sign private_key.pem -out script_with_error.sig script_with_error.sh
-openssl base64 -in script_with_error.sig -out script_with_error.sig.b64
+openssl dgst -sha256 -sign private_key.pem -out test/good_script.sig test/good_script.sh
+openssl base64 -in test/good_script.sig -out test/good_script.sig.b64
+openssl dgst -sha256 -sign private_key.pem -out test/bad_script.sig test/bad_script.sh
+openssl base64 -in test/bad_script.sig -out test/bad_script.sig.b64
 ```
+
 
 ### Run the Server and Test Client
 Build and run the server and test client:
