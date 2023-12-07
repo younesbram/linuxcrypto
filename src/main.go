@@ -1,173 +1,220 @@
-// main.go
 package main
 
 import (
-	"bufio"
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
-	"fmt"
-	"io/ioutil"
-	"log"
-	"net"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"sync"
+    "bufio"
+    "crypto"
+    "crypto/rsa"
+    "crypto/sha256"
+    "crypto/x509"
+    "encoding/base64"
+    "encoding/pem"
+    "errors"
+    "fmt"
+    "io/ioutil"
+    "log"
+    "net"
+    "os"
+    "os/exec"
+    "path/filepath"
+    "strings"
+    "sync"
 )
 
 const (
-	port            = ":8080"                
-	certsDirectory  = "./certs" // dir containing the x509 certificates
-	certExtension   = ".crt"
+    port              = ":8080"
+    certsDirectory    = "./certs"
+    certExtension     = ".crt"
+    maxConcurrentReqs = 10 // Maximum concurrent requests allowed
 )
 
 var (
-	mu sync.Mutex // Mutex to handle concurrent requests
+    certificates = make(map[string]*publicKeyInfo)
+    requestChan  = make(chan *request, maxConcurrentReqs)
+    logger       = log.New(os.Stdout, "[Server] ", log.LstdFlags)
 )
 
-// publicKeyInfo holds the public key and the associated metadata
 type publicKeyInfo struct {
-	publicKey *rsa.PublicKey
-	keyUsage  x509.KeyUsage
+    publicKey *rsa.PublicKey
+    keyUsage  x509.KeyUsage
+}
+
+type request struct {
+    conn       net.Conn
+    encodedSig string
+    script     string
 }
 
 func main() {
-	certificates, err := loadPublicKeysFromDir(certsDirectory)
-	if err != nil {
-		log.Fatalf("Error loading certificates: %v", err)
-	}
+    loadPublicKeysFromDir(certsDirectory)
 
-	listener, err := net.Listen("tcp", port)
-	if err != nil {
-		log.Fatalf("Unable to listen on port %s: %v", port, err)
-	}
-	defer listener.Close()
+    listener, err := net.Listen("tcp", port)
+    if err != nil {
+        logger.Fatalf("Error listening on port: %v", err)
+    }
+    defer listener.Close()
 
-	log.Printf("Server listening on %s", port)
+    logger.Println("Server listening on", port)
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Unable to accept connection: %v", err)
-			continue
-		}
-		go handleConnection(conn, certificates)
-	}
+    for i := 0; i < maxConcurrentReqs; i++ {
+        go requestHandler()
+    }
+
+    for {
+        conn, err := listener.Accept()
+        if err != nil {
+            logger.Printf("Error accepting connection: %v", err)
+            continue
+        }
+
+        go handleConnection(conn)
+    }
 }
 
-// handleConnection manages each client connection
-func handleConnection(conn net.Conn, certificates []publicKeyInfo) {
-	defer conn.Close()
+func handleConnection(conn net.Conn) {
+    defer conn.Close()
 
-	reader := bufio.NewReader(conn)
-	encodedSig, err := reader.ReadString('\n')
-	if err != nil {
-		log.Printf("Unable to read signature: %v", err)
-		fmt.Fprintln(conn, "Error reading signature")
-		return
-	}
-	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encodedSig))
-	if err != nil {
-		log.Printf("Unable to decode signature: %v", err)
-		fmt.Fprintln(conn, "Error decoding signature")
-		return
-	}
+    reader := bufio.NewReader(conn)
 
-	scriptContent, err := ioutil.ReadAll(reader)
-	if err != nil {
-		log.Printf("Unable to read script: %v", err)
-		fmt.Fprintln(conn, "Error reading script")
-		return
-	}
+    encodedSig, err := reader.ReadString('\n')
+    if err != nil {
+        logger.Printf("Error reading signature: %v", err)
+        return
+    }
 
-	valid := false
-	for _, cert := range certificates {
-		if (cert.keyUsage & x509.KeyUsageDigitalSignature) != 0 {
-			if err := verifySignature(cert.publicKey, signature, scriptContent); err == nil {
-				valid = true
-				break
-			}
-		}
-	}
+    script, err := ioutil.ReadAll(reader)
+    if err != nil {
+        logger.Printf("Error reading script: %v", err)
+        return
+    }
 
-	if !valid {
-		log.Printf("Invalid signature")
-		fmt.Fprintln(conn, "Invalid signature")
-		return
-	}
-
-	output, err := executeScript(scriptContent)
-	if err != nil {
-		log.Printf("Error executing script: %v", err)
-		fmt.Fprintln(conn, "Error executing script")
-		return
-	}
-
-	fmt.Fprintln(conn, "Script executed successfully")
-	fmt.Fprintln(conn, string(output))
+    requestChan <- &request{
+        conn:       conn,
+        encodedSig: strings.TrimSpace(encodedSig),
+        script:     string(script),
+    }
 }
 
-// loadPublicKeysFromDir loads all public keys and their usage from the certificate files in a directory
-func loadPublicKeysFromDir(certDir string) ([]publicKeyInfo, error) {
-	var keys []publicKeyInfo
-	files, err := ioutil.ReadDir(certDir)
-	if err != nil {
-		return nil, err
-	}
+func loadPublicKeysFromDir(certDir string) {
+    files, err := ioutil.ReadDir(certDir)
+    if err != nil {
+        logger.Fatalf("Error reading certificates directory: %v", err)
+    }
 
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), certExtension) {
-			certPath := filepath.Join(certDir, file.Name())
-			certData, err := ioutil.ReadFile(certPath)
-			if err != nil {
-				log.Printf("Error reading certificate file %s: %v", certPath, err)
-				continue
-			}
+    for _, f := range files {
+        if filepath.Ext(f.Name()) == certExtension {
+            certPath := filepath.Join(certDir, f.Name())
+            certData, err := ioutil.ReadFile(certPath)
+            if err != nil {
+                logger.Printf("Error reading certificate file %s: %v", certPath, err)
+                continue
+            }
 
-			block, _ := pem.Decode(certData)
-			if block == nil {
-				log.Printf("Failed to decode PEM block containing the certificate %s", certPath)
-				continue
-			}
+            block, _ := pem.Decode(certData)
+            if block == nil {
+                logger.Printf("Failed to decode PEM block containing the certificate %s", certPath)
+                continue
+            }
 
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				log.Printf("Failed to parse certificate %s: %v", certPath, err)
-				continue
-			}
+            cert, err := x509.ParseCertificate(block.Bytes)
+            if err != nil {
+                logger.Printf("Failed to parse certificate %s: %v", certPath, err)
+                continue
+            }
 
-			rsaPublicKey, ok := cert.PublicKey.(*rsa.PublicKey)
-			if !ok {
-				log.Printf("Certificate public key is not of type RSA in %s", certPath)
-				continue
-			}
+            rsaPublicKey, ok := cert.PublicKey.(*rsa.PublicKey)
+            if !ok {
+                logger.Printf("Certificate public key is not of type RSA in %s", certPath)
+                continue
+            }
 
-			keys = append(keys, publicKeyInfo{
-				publicKey: rsaPublicKey,
-				keyUsage:  cert.KeyUsage,
-			})
-		}
-	}
+            if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+                logger.Printf("Certificate %s does not have a digital signature key usage", certPath)
+                continue
+            }
 
-	return keys, nil
+            certificates[f.Name()] = &publicKeyInfo{
+                publicKey: rsaPublicKey,
+                keyUsage:  cert.KeyUsage,
+            }
+        }
+    }
 }
 
-// verifySignature checks the digital signature of the script content using the provided public key
-func verifySignature(publicKey *rsa.PublicKey, signature, scriptContent []byte) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	hashed := sha256.Sum256(scriptContent)
-	return rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signature)
+func requestHandler() {
+    for req := range requestChan {
+        processRequest(req)
+    }
 }
 
-// executeScript executes the script content in a bash shell and returns its combined output
-func executeScript(scriptContent []byte) ([]byte, error) {
-	cmd := exec.Command("bash")
-	cmd.Stdin = strings.NewReader(string(scriptContent))
-	return cmd.CombinedOutput()
+func processRequest(req *request) {
+    signature, err := base64.StdEncoding.DecodeString(req.encodedSig)
+    if err != nil {
+        logger.Printf("Error decoding signature: %v", err)
+        fmt.Fprintln(req.conn, "Error decoding signature")
+        return
+    }
+
+    if !validateScript(req.script) {
+        logger.Println("Invalid script format")
+        fmt.Fprintln(req.conn, "Invalid script format")
+        return
+    }
+
+    valid := verifySignature(signature, []byte(req.script))
+    if !valid {
+        logger.Println("Invalid signature")
+        fmt.Fprintln(req.conn, "Invalid signature")
+        return
+    }
+
+    output, err := exec.Command("bash", "-c", req.script).CombinedOutput()
+    if err != nil {
+        logger.Printf("Error executing script: %v", err)
+        fmt.Fprintln(req.conn, "Error executing script")
+        return
+    }
+
+    fmt.Fprintln(req.conn, "Script executed successfully")
+    fmt.Fprintln(req.conn, string(output))
+}
+
+func verifySignature(signature, script []byte) bool {
+    hashed := sha256.Sum256(script)
+
+    for _, info := range certificates {
+        if info.keyUsage&x509.KeyUsageDigitalSignature != 0 {
+            err := rsa.VerifyPKCS1v15(info.publicKey, crypto.SHA256, hashed[:], signature)
+            if err == nil {
+                return true
+            }
+        }
+    }
+
+    return false
+}
+
+func validateScript(script string) bool {
+    // Example: Limit script length
+    /*if len(script) > 1024 {
+        logger.Println("Script length exceeds the allowed limit")
+        return false
+    }
+
+    // Example: Disallow certain dangerous commands
+    disallowedCommands := []string{"rm ", "dd ", "shutdown "}
+    for _, cmd := range disallowedCommands {
+        if strings.Contains(script, cmd) {
+            logger.Printf("Script contains disallowed command: %s", cmd)
+            return false
+        }
+    }
+
+    // Example: Character whitelisting (allow only alphanumeric and specific symbols)
+    if !regexp.MustCompile(`^[a-zA-Z0-9\s\.,_\/\(\)-]*$`).MatchString(script) {
+        logger.Println("Script contains invalid characters")
+        return false
+    }
+	// can use regular expressions too.
+    */// Add more validation checks as per your requirements
+    return true
 }
