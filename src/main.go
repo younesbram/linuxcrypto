@@ -257,6 +257,7 @@ func validateScript(script string) bool {
         return false
     }
 	// can use regular expressions too.
-    */// Add more validation checks as per your requirements
+    */// Add more validation checks as per requirements
+    // Shellcode injection, file system manipulation, etc.
     return true
 }

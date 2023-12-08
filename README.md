@@ -71,6 +71,7 @@ The `test_client.go` script demonstrates how to send a signed script and receive
 
 ## Future Work
 
+* Use TLS/SSL for secure communication
 * Improve robustness of error handling.
 * Harden the server against race conditions, malicious scripts etc rate limitting more logging with unique IDs etc.. by commiting PoCs and further threat modelling.
 * Can customize the build scripts to incorporate and make use of access control for more robust production ready code. 

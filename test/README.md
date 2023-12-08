@@ -57,7 +57,7 @@ Build and run the server and test client:
 ./test/test.sh
 
 ./server
-./test_client
+./test/test_client
 ```
 
 ### Automated Testing (Future work)

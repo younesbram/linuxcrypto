@@ -54,7 +54,7 @@ func TestInvalidSignature(t *testing.T) {
 }
 
 func TestErrorExecutingScript(t *testing.T) {
-	signature := loadFile("bad_script.sig.b64", t)
+	signature := loadFile("./test/bad_script.sig.b64", t)
 	scriptContent := loadFile("bad_script.sh", t) 
 	sendRequestToServer(signature, scriptContent, "Error executing script", t)
 }
