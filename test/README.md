@@ -9,16 +9,15 @@ Before running the tests, ensure you have:
 - OpenSSL installed for generating RSA key pairs and signatures.
 - `go` compiler for building the test client.
 
-### Generate RSA Key Pair
+### Create a self-sigined X.509 Certificate:
 
-Run the following commands to generate an RSA key pair:
-
+Please check and change `openssl.cnf` for a valid X.509 certificate before running this command.
 ```
-openssl genrsa -out private_key.pem 2048
-openssl rsa -in private_key.pem -pubout -out certs/public_key.pem
+openssl req -new -x509 -nodes -days 4 -config openssl.cnf -out certs/public_cert.pem
 ```
+This command creates a self-signed X.509 certificate (certificate.pem) valid for 4 days.
 
-Make sure `public_key.pem` in the server's `certs` directory.
+Make sure `public_cert.pem` in the server's `certs` directory.
 Please make sure your private key is kept secret.
 
 ### Create Test Scripts

@@ -38,27 +38,31 @@ func loadFile(fileName string, t *testing.T) []byte {
 }
 
 func TestValidSignature(t *testing.T) {
-	signature := loadFile("test/good_script.sig.b64", t) 
-	scriptContent := loadFile("test/good_script.sh", t)  
-	sendRequestToServer(signature, scriptContent, "Script executed successfully", t)
+    signature := loadFile("good_script.sig.b64", t)
+    scriptContent := loadFile("good_script.sh", t)
+
+    err := sendRequestToServer(signature, scriptContent, "Script executed successfully", t)
+    if err != nil {
+        t.Errorf("sendRequestToServer() failed: %v", err)
+    }
 }
 
 func TestInvalidSignature(t *testing.T) {
 	signature := []byte("invalid_signature")
-	scriptContent := loadFile("script.sh", t)
+	scriptContent := loadFile("bad_script.sh", t)
 	sendRequestToServer(signature, scriptContent, "Invalid signature", t)
 }
 
 func TestErrorExecutingScript(t *testing.T) {
-	signature := loadFile("test/bad_script.sig.b64", t)
-	scriptContent := loadFile("test/bad_script.sh", t) 
+	signature := loadFile("bad_script.sig.b64", t)
+	scriptContent := loadFile("bad_script.sh", t) 
 	sendRequestToServer(signature, scriptContent, "Error executing script", t)
 }
 
 func TestConcurrentRequests(t *testing.T) {
 	numRequests := 5
-	signature := loadFile("test/good_script.sig.b64", t)
-	scriptContent := loadFile("test/good_script.sh", t)
+	signature := loadFile("good_script.sig.b64", t)
+	scriptContent := loadFile("good_script.sh", t)
 
 	responseChan := make(chan string, numRequests)
 
@@ -74,26 +78,40 @@ func TestConcurrentRequests(t *testing.T) {
 	}
 }
 
-func sendRequestToServer(signature, scriptContent []byte, expectedResponse string, t *testing.T) {
-	conn, err := net.Dial("tcp", "localhost:8080")
-	if err != nil {
-		t.Fatalf("Error connecting to server: %v", err)
-	}
-	defer conn.Close()
+func sendRequestToServer(signature, scriptContent []byte, expectedResponse string, t *testing.T) error {
+    conn, err := net.Dial("tcp", "localhost:8080")
+    if err != nil {
+        return fmt.Errorf("error connecting to server: %v", err)
+    }
+    defer conn.Close()
 
-	message := fmt.Sprintf("%s\n%s", signature, scriptContent)
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		t.Fatalf("Error sending message: %v", err)
-	}
+    // Add a newline character to the end of the script content
+    scriptContent = append(scriptContent, []byte("\n")...)
 
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("Error reading response: %v", err)
-	}
+    // Send the signature to the server
+    _, err = conn.Write(signature)
+    if err != nil {
+        return fmt.Errorf("error sending signature: %v", err)
+    }
 
-	if !strings.Contains(string(buf[:n]), expectedResponse) {
-		t.Errorf("Unexpected response: %s", string(buf[:n]))
-	}
+    // Send the script content to the server
+    _, err = conn.Write(scriptContent)
+    if err != nil {
+        return fmt.Errorf("error sending script content: %v", err)
+    }
+
+    buf := make([]byte, 1024)
+    n, err := conn.Read(buf)
+    if err != nil {
+        return fmt.Errorf("error reading response: %v", err)
+    }
+
+    response := string(buf[:n])
+    fmt.Printf("Debug: Received response from server:\n%s\n", response) // Debugging statement
+
+    if !strings.Contains(response, expectedResponse) {
+        return fmt.Errorf("unexpected response: %s", response)
+    }
+
+    return nil
 }

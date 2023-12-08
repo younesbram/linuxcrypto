@@ -1,0 +1,22 @@
+[ req ]
+default_bits       = 2048
+default_md         = sha256
+default_keyfile    = private_key.pem
+prompt             = no
+encrypt_key        = no
+distinguished_name = req_distinguished_name
+x509_extensions    = v3_ca
+
+[ req_distinguished_name ]
+countryName            = "US" # Country Code
+stateOrProvinceName    = "California" # State or Province
+localityName           = "San Francisco" # Locality
+organizationName       = "MyOrganization" # Organization Name
+commonName             = "My Server" # Common Name for your server
+
+[ v3_ca ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always, issuer:always

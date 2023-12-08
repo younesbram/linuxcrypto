@@ -22,7 +22,6 @@ import (
 const (
     port              = ":8080"
     certsDirectory    = "./certs"
-    certExtension     = ".crt"
     maxConcurrentReqs = 10 // Maximum concurrent requests allowed
 )
 
@@ -89,12 +88,19 @@ func handleConnection(conn net.Conn) {
         return
     }
 
+    // Debug: Print the received encoded signature
+    fmt.Printf("Debug: Received encoded signature: %s\n", encodedSig)
+
     // Read the script content
     script, err := ioutil.ReadAll(reader)
     if err != nil {
         logger.Printf("Error reading script: %v", err)
         return
     }
+
+    // Debug: Print the received script
+    fmt.Printf("Debug: Received script: %s\n", string(script))
+
 
     // Send the request for processing
     requestChan <- &request{
@@ -111,9 +117,10 @@ func loadPublicKeysFromDir(certDir string) {
         logger.Fatalf("Error reading certificates directory: %v", err)
     }
 
-    // Iterate over the files and load the certificates
+    // Iterate over the files and load the public keys
     for _, f := range files {
-        if filepath.Ext(f.Name()) == certExtension {
+        ext := filepath.Ext(f.Name())
+        if ext == ".pem" || ext == ".crt" {
             // Construct file path and read the certificate
             certPath := filepath.Join(certDir, f.Name())
             certData, err := ioutil.ReadFile(certPath)
@@ -158,6 +165,7 @@ func loadPublicKeysFromDir(certDir string) {
     }
 }
 
+
 func requestHandler() {
     for req := range requestChan {
         processRequest(req)
@@ -173,6 +181,10 @@ func processRequest(req *request) {
         return
     }
 
+    // Debug: Print the decoded signature
+    fmt.Printf("Debug: Decoded signature: %x\n", signature)
+
+
     // Validate the script format
     if !validateScript(req.script) {
         logger.Println("Invalid script format")
@@ -187,6 +199,9 @@ func processRequest(req *request) {
         fmt.Fprintln(req.conn, "Invalid signature")
         return
     }
+    // Debug: Print the result of the signature verification
+    fmt.Printf("Debug: Signature verification result: %v\n", valid)
+
 
     // Execute the script if the signature is valid
     output, err := exec.Command("bash", "-c", req.script).CombinedOutput()
