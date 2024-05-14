@@ -2,7 +2,6 @@ package main
 
 import (
     "crypto"
-    "crypto/rand"
     "crypto/rsa"
     "crypto/sha256"
     "crypto/x509"
