@@ -2,6 +2,7 @@ package main
 
 import (
     "crypto"
+    "crypto/rand"
     "crypto/rsa"
     "crypto/sha256"
     "crypto/x509"
@@ -15,7 +16,9 @@ import (
     "os"
     "os/exec"
     "path/filepath"
+    "regexp"
     "strings"
+    "sync"
 )
 
 // Constants for server config
@@ -23,6 +26,7 @@ const (
     port              = ":8080"
     certsDirectory    = "./certs"
     maxConcurrentReqs = 10 // Maximum concurrent requests allowed
+    maxScriptLength   = 1024
 )
 
 // Global variables
@@ -30,6 +34,7 @@ var (
     certificates = make(map[string]*publicKeyInfo) // Map to store certificates
     requestChan  = make(chan *request, maxConcurrentReqs) // Channel for requests
     logger       = log.New(os.Stdout, "[Server] ", log.LstdFlags) // Logger
+    certsMutex   sync.RWMutex // Mutex to protect certificates map
 )
 
 // Struct for storing public key information
@@ -85,22 +90,17 @@ func handleConnection(conn net.Conn) {
     encodedSig, err := reader.ReadString('\n')
     if err != nil {
         logger.Printf("Error reading signature: %v", err)
+        fmt.Fprintln(conn, "Error reading signature")
         return
     }
-
-    // Debug: Print the received encoded signature
-    fmt.Printf("Debug: Received encoded signature: %s\n", encodedSig)
 
     // Read the script content
     script, err := ioutil.ReadAll(reader)
     if err != nil {
         logger.Printf("Error reading script: %v", err)
+        fmt.Fprintln(conn, "Error reading script")
         return
     }
-
-    // Debug: Print the received script
-    fmt.Printf("Debug: Received script: %s\n", string(script))
-
 
     // Send the request for processing
     requestChan <- &request{
@@ -157,14 +157,15 @@ func loadPublicKeysFromDir(certDir string) {
             }
 
             // Store the public key information
+            certsMutex.Lock()
             certificates[f.Name()] = &publicKeyInfo{
                 publicKey: rsaPublicKey,
                 keyUsage:  cert.KeyUsage,
             }
+            certsMutex.Unlock()
         }
     }
 }
-
 
 func requestHandler() {
     for req := range requestChan {
@@ -173,6 +174,8 @@ func requestHandler() {
 }
 
 func processRequest(req *request) {
+    defer req.conn.Close()
+
     // Decode the base64 encoded signature
     signature, err := base64.StdEncoding.DecodeString(req.encodedSig)
     if err != nil {
@@ -180,10 +183,6 @@ func processRequest(req *request) {
         fmt.Fprintln(req.conn, "Error decoding signature")
         return
     }
-
-    // Debug: Print the decoded signature
-    fmt.Printf("Debug: Decoded signature: %x\n", signature)
-
 
     // Validate the script format
     if !validateScript(req.script) {
@@ -199,15 +198,12 @@ func processRequest(req *request) {
         fmt.Fprintln(req.conn, "Invalid signature")
         return
     }
-    // Debug: Print the result of the signature verification
-    fmt.Printf("Debug: Signature verification result: %v\n", valid)
-
 
     // Execute the script if the signature is valid
     output, err := exec.Command("bash", "-c", req.script).CombinedOutput()
     if err != nil {
         logger.Printf("Error executing script: %v", err)
-        fmt.Fprintln(req.conn, "Error executing script")
+        fmt.Fprintln(req.conn, "Error executing script: "+err.Error())
         return
     }
 
@@ -222,6 +218,9 @@ func verifySignature(signature, script []byte) bool {
     hashed := sha256.Sum256(script)
 
     // Iterate over the stored public keys and verify the signature
+    certsMutex.RLock()
+    defer certsMutex.RUnlock()
+
     for _, info := range certificates {
         if info.keyUsage&x509.KeyUsageDigitalSignature != 0 {
             err := rsa.VerifyPKCS1v15(info.publicKey, crypto.SHA256, hashed[:], signature)
@@ -236,14 +235,14 @@ func verifySignature(signature, script []byte) bool {
 
 // This function should reflect compliance with security standards such as CIS benchmarks.
 func validateScript(script string) bool {
-    // Example: Limit script length
-    /*if len(script) > 1024 {
+    // Limit script length
+    if len(script) > maxScriptLength {
         logger.Println("Script length exceeds the allowed limit")
         return false
     }
 
-    // Example: Disallow certain dangerous commands
-    disallowedCommands := []string{"rm ", "dd ", "shutdown "}
+    // Disallow certain dangerous commands
+    disallowedCommands := []string{"rm ", "dd ", "shutdown ", "reboot ", "mkfs ", "chmod ", "chown "}
     for _, cmd := range disallowedCommands {
         if strings.Contains(script, cmd) {
             logger.Printf("Script contains disallowed command: %s", cmd)
@@ -251,13 +250,13 @@ func validateScript(script string) bool {
         }
     }
 
-    // Example: Character whitelisting (allow only alphanumeric and specific symbols)
+    // Character whitelisting (allow only alphanumeric and specific symbols)
     if !regexp.MustCompile(`^[a-zA-Z0-9\s\.,_\/\(\)-]*$`).MatchString(script) {
         logger.Println("Script contains invalid characters")
         return false
     }
-	// can use regular expressions too.
-    */// Add more validation checks as per requirements
-    // Shellcode injection, file system manipulation, etc.
+
+    // Add more validation checks as per requirements (e.g., shellcode injection, file system manipulation, etc.)
+
     return true
 }
